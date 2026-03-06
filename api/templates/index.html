@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>FinSight</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&family=DM+Serif+Display:ital@0;1&display=swap" rel="stylesheet" />
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --ink: #0f0f0f; --ink-2: #3a3a3a; --ink-3: #6b6b6b; --ink-4: #a0a0a0;
+  --paper: #f8f7f4; --paper-2: #f0ede8; --paper-3: #e8e4de;
+  --line: #e2ddd8; --white: #ffffff;
+  --green: #1a7a4a; --green-bg: #edf7f1; --green-mid: #a8d9bc;
+  --red-bg: #fdf0ef; --red: #c0392b;
+  --amber-bg: #fdf6ec; --amber: #b45309;
+  --sidebar-w: 256px;
+}
+html, body { height: 100%; background: var(--paper); color: var(--ink); font-family: 'DM Sans', sans-serif; font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
+#shell { display: flex; height: 100vh; overflow: hidden; }
+
+/* SIDEBAR */
+#sidebar { width: var(--sidebar-w); background: var(--paper-2); border-right: 1px solid var(--line); display: flex; flex-direction: column; flex-shrink: 0; height: 100vh; overflow: hidden; }
+.sidebar-top { padding: 14px 12px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; }
+.logo { display: flex; align-items: center; gap: 7px; text-decoration: none; }
+.logo-mark { width: 26px; height: 26px; background: var(--ink); border-radius: 7px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.logo-text { font-family: 'DM Serif Display', serif; font-size: 17px; color: var(--ink); letter-spacing: -0.3px; }
+.new-btn { width: 28px; height: 28px; background: none; border: 1px solid var(--line); border-radius: 7px; cursor: pointer; display: flex; align-items: center; justify-content: center; color: var(--ink-3); transition: all 0.15s; }
+.new-btn:hover { background: var(--paper-3); color: var(--ink); border-color: var(--ink-4); }
+.section-label { font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-4); padding: 12px 14px 5px; }
+#chatList { flex: 1; overflow-y: auto; padding: 3px 7px 6px; }
+#chatList::-webkit-scrollbar { width: 3px; }
+#chatList::-webkit-scrollbar-thumb { background: var(--line); border-radius: 2px; }
+.chat-item { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 8px; cursor: pointer; color: var(--ink-2); font-size: 12.5px; transition: background 0.12s; }
+.chat-item:hover { background: var(--paper-3); }
+.chat-item.active { background: var(--white); color: var(--ink); }
+.chat-item-icon { flex-shrink: 0; color: var(--ink-4); }
+.chat-item-title { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat-item.active .chat-item-title { font-weight: 500; }
+.chat-doc-tag { font-size: 10px; color: var(--green); background: var(--green-bg); padding: 1px 6px; border-radius: 10px; flex-shrink: 0; max-width: 68px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.no-chats { padding: 18px 14px; font-size: 12px; color: var(--ink-4); font-style: italic; text-align: center; }
+.sidebar-bottom { border-top: 1px solid var(--line); padding: 10px 11px; }
+.upload-zone { display: flex; align-items: center; gap: 8px; padding: 9px 10px; background: var(--white); border: 1px dashed var(--line); border-radius: 8px; cursor: pointer; transition: all 0.15s; color: var(--ink-3); font-size: 12px; }
+.upload-zone:hover { border-color: var(--green-mid); background: var(--green-bg); color: var(--green); }
+.upload-zone.loading { border-style: solid; border-color: var(--green-mid); background: var(--green-bg); color: var(--green); cursor: default; }
+#fileInput { display: none; }
+.spin { width: 14px; height: 14px; border: 2px solid var(--green-mid); border-top-color: var(--green); border-radius: 50%; animation: spin 0.8s linear infinite; flex-shrink: 0; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* MAIN */
+#main { flex: 1; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+#topbar { height: 50px; border-bottom: 1px solid var(--line); display: flex; align-items: center; padding: 0 22px; gap: 10px; flex-shrink: 0; }
+.topbar-title { font-size: 13px; color: var(--ink-3); flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.doc-pill { display: flex; align-items: center; gap: 5px; padding: 4px 10px; background: var(--green-bg); border: 1px solid var(--green-mid); border-radius: 20px; font-size: 11px; color: var(--green); font-weight: 500; }
+#scrollArea { flex: 1; overflow-y: auto; }
+#scrollArea::-webkit-scrollbar { width: 4px; }
+#scrollArea::-webkit-scrollbar-thumb { background: var(--line); border-radius: 2px; }
+
+/* HERO */
+#hero { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100%; padding: 60px 32px; text-align: center; }
+.hero-eyebrow { font-size: 10px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--green); margin-bottom: 14px; }
+.hero-title { font-family: 'DM Serif Display', serif; font-size: 40px; line-height: 1.12; letter-spacing: -0.8px; color: var(--ink); margin-bottom: 13px; }
+.hero-title em { font-style: italic; color: var(--green); }
+.hero-sub { font-size: 14px; color: var(--ink-3); max-width: 350px; line-height: 1.7; margin-bottom: 42px; }
+.starters { display: flex; flex-direction: column; gap: 7px; width: 100%; max-width: 450px; }
+.starter { display: flex; align-items: center; gap: 10px; padding: 11px 14px; background: var(--white); border: 1px solid var(--line); border-radius: 9px; font-size: 13px; color: var(--ink-2); cursor: pointer; text-align: left; transition: all 0.15s; font-family: inherit; }
+.starter:hover { border-color: var(--green-mid); background: var(--green-bg); color: var(--ink); }
+.starter-arr { margin-left: auto; color: var(--ink-4); transition: all 0.15s; flex-shrink: 0; }
+.starter:hover .starter-arr { color: var(--green); transform: translateX(2px); }
+
+/* CHAT */
+#chatWrap { display: none; flex-direction: column; max-width: 680px; margin: 0 auto; width: 100%; padding: 28px 28px 12px; gap: 0; }
+.turn { display: flex; flex-direction: column; gap: 13px; padding: 22px 0; border-bottom: 1px solid var(--paper-3); }
+.turn:last-child { border-bottom: none; }
+.q-row { display: flex; justify-content: flex-end; }
+.q-bubble { background: var(--ink); color: var(--white); padding: 10px 15px; border-radius: 16px 16px 4px 16px; font-size: 13.5px; max-width: 82%; line-height: 1.55; }
+.a-row { display: flex; flex-direction: column; gap: 10px; }
+.a-meta { display: flex; align-items: center; gap: 7px; }
+.fs-tag { font-size: 11px; font-weight: 600; color: var(--green); display: flex; align-items: center; gap: 4px; }
+.fs-tag::before { content: ''; width: 5px; height: 5px; background: var(--green); border-radius: 50%; }
+.conf-tag { font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 10px; text-transform: uppercase; letter-spacing: 0.04em; }
+.conf-HIGH { background: var(--green-bg); color: var(--green); }
+.conf-MEDIUM { background: var(--amber-bg); color: var(--amber); }
+.conf-LOW { background: var(--red-bg); color: var(--red); }
+.elapsed { font-size: 11px; color: var(--ink-4); margin-left: auto; }
+.subqs { display: flex; flex-wrap: wrap; gap: 5px; }
+.subq-chip { font-size: 11px; padding: 3px 9px; background: var(--paper-2); border: 1px solid var(--line); border-radius: 20px; color: var(--ink-3); }
+.a-text { font-size: 14px; line-height: 1.8; color: var(--ink); white-space: pre-wrap; word-break: break-word; }
+.cites { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 2px; }
+.cite-chip { display: flex; align-items: center; gap: 5px; padding: 4px 9px; background: var(--white); border: 1px solid var(--line); border-radius: 7px; font-size: 11px; color: var(--ink-3); cursor: default; transition: all 0.15s; position: relative; }
+.cite-chip:hover { border-color: var(--green-mid); background: var(--green-bg); color: var(--ink-2); }
+.cite-n { width: 15px; height: 15px; background: var(--paper-2); border-radius: 3px; font-size: 9px; font-weight: 700; display: flex; align-items: center; justify-content: center; color: var(--ink-4); flex-shrink: 0; }
+.cite-chip:hover .cite-n { background: var(--green); color: white; }
+.cite-tip { position: absolute; bottom: calc(100% + 7px); left: 0; background: var(--ink); color: white; font-size: 11px; padding: 7px 10px; border-radius: 7px; max-width: 250px; line-height: 1.5; z-index: 100; pointer-events: none; opacity: 0; transform: translateY(4px); transition: all 0.15s; white-space: normal; }
+.cite-chip:hover .cite-tip { opacity: 1; transform: translateY(0); }
+.loading-turn { padding: 22px 0; display: flex; flex-direction: column; gap: 13px; }
+.agent-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--ink-4); }
+.dots { display: flex; gap: 3px; }
+.dots span { width: 4px; height: 4px; border-radius: 50%; background: var(--green); animation: think 1.2s infinite; }
+.dots span:nth-child(2) { animation-delay: 0.2s; }
+.dots span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes think { 0%,60%,100% { opacity:0.2; transform:scale(0.8); } 30% { opacity:1; transform:scale(1); } }
+
+/* INPUT */
+#inputWrap { flex-shrink: 0; padding: 10px 28px 18px; max-width: 680px; margin: 0 auto; width: 100%; }
+.input-box { display: flex; align-items: flex-end; gap: 10px; background: var(--white); border: 1.5px solid var(--line); border-radius: 13px; padding: 10px 12px; transition: border-color 0.2s; box-shadow: 0 2px 10px rgba(0,0,0,0.04); }
+.input-box:focus-within { border-color: var(--green-mid); box-shadow: 0 2px 14px rgba(26,122,74,0.07); }
+#qInput { flex: 1; border: none; outline: none; font-family: 'DM Sans', sans-serif; font-size: 13.5px; color: var(--ink); background: transparent; resize: none; line-height: 1.55; min-height: 22px; max-height: 120px; }
+#qInput::placeholder { color: var(--ink-4); }
+#sendBtn { width: 30px; height: 30px; background: var(--ink); color: white; border: none; border-radius: 7px; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: all 0.15s; }
+#sendBtn:hover { background: var(--green); }
+#sendBtn:disabled { opacity: 0.3; cursor: not-allowed; }
+.input-hint { text-align: center; font-size: 11px; color: var(--ink-4); margin-top: 6px; }
+
+/* TOAST */
+.toast { position: fixed; bottom: 22px; right: 22px; padding: 9px 14px; border-radius: 9px; font-size: 12.5px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); transform: translateY(14px); opacity: 0; transition: all 0.22s; z-index: 999; pointer-events: none; }
+.toast.show { transform: none; opacity: 1; }
+.toast.ok { background: var(--ink); color: white; }
+.toast.err { background: var(--red); color: white; }
+</style>
+</head>
+<body>
+<div id="shell">
+
+<!-- SIDEBAR -->
+<div id="sidebar">
+  <div class="sidebar-top">
+    <a class="logo" href="#" onclick="newChat();return false;">
+      <div class="logo-mark">
+        <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="white" stroke-width="1.5" stroke-linecap="round">
+          <polyline points="1,10 4,6 7,8 10,3 13,5"/>
+          <circle cx="13" cy="5" r="1.2" fill="white" stroke="none"/>
+        </svg>
+      </div>
+      <span class="logo-text">FinSight</span>
+    </a>
+    <button class="new-btn" onclick="newChat()" title="New chat">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+        <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+      </svg>
+    </button>
+  </div>
+
+  <div class="section-label">Chats</div>
+  <div id="chatList"><div class="no-chats">No chats yet</div></div>
+
+  <div class="sidebar-bottom">
+    <input type="file" id="fileInput" accept=".pdf" />
+    <div class="upload-zone" id="uploadZone" onclick="document.getElementById('fileInput').click()">
+      <svg id="uploadIco" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+        <polyline points="17 8 12 3 7 8"/>
+        <line x1="12" y1="3" x2="12" y2="15"/>
+      </svg>
+      <span id="uploadLbl">Upload PDF</span>
+    </div>
+  </div>
+</div>
+
+<!-- MAIN -->
+<div id="main">
+  <div id="topbar">
+    <span class="topbar-title" id="topbarTitle">New chat</span>
+    <div class="doc-pill" id="docPill" style="display:none">
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+      <span id="docPillName"></span>
+    </div>
+  </div>
+
+  <div id="scrollArea">
+    <div id="hero">
+      <div class="hero-eyebrow">AI · Financial Intelligence</div>
+      <h1 class="hero-title">Ask your<br/><em>documents</em> anything</h1>
+      <p class="hero-sub">Upload a 10-K, earnings report, or filing. Get cited answers in seconds.</p>
+      <div class="starters">
+        <button class="starter" onclick="useStarter(this)">What was total revenue and how did it change year over year?<span class="starter-arr">→</span></button>
+        <button class="starter" onclick="useStarter(this)">What are the key risk factors mentioned in this filing?<span class="starter-arr">→</span></button>
+        <button class="starter" onclick="useStarter(this)">What is the gross margin and how does it compare to prior year?<span class="starter-arr">→</span></button>
+        <button class="starter" onclick="useStarter(this)">What guidance did management give for the next fiscal year?<span class="starter-arr">→</span></button>
+      </div>
+    </div>
+    <div id="chatWrap"></div>
+  </div>
+
+  <div id="inputWrap">
+    <div class="input-box">
+      <textarea id="qInput" rows="1" placeholder="Ask anything about your financial documents..."></textarea>
+      <button id="sendBtn" onclick="submit()">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+        </svg>
+      </button>
+    </div>
+    <div class="input-hint">Enter to send · Shift+Enter for new line · Upload PDF from sidebar</div>
+  </div>
+</div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+// ── STATE ──
+let chats = [];
+let activeChatId = null;
+let busy = false;
+let currentDoc = null;
+
+window.addEventListener('load', () => {
+  setupTextarea();
+  document.getElementById('fileInput').addEventListener('change', e => {
+    if (e.target.files[0]) uploadFile(e.target.files[0]);
+  });
+  try { chats = JSON.parse(localStorage.getItem('fs_chats') || '[]'); } catch(e) { chats = []; }
+  renderList();
+});
+
+// ── RENDER SIDEBAR ──
+function renderList() {
+  const el = document.getElementById('chatList');
+  if (!chats.length) { el.innerHTML = '<div class="no-chats">No chats yet</div>'; return; }
+  el.innerHTML = chats.slice().reverse().map(c => `
+    <div class="chat-item ${c.id === activeChatId ? 'active' : ''}" onclick="switchChat('${c.id}')">
+      <svg class="chat-item-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+      <span class="chat-item-title">${esc(c.title)}</span>
+      ${c.doc ? `<span class="chat-doc-tag">${esc(c.doc.replace('.pdf',''))}</span>` : ''}
+    </div>`).join('');
+}
+
+function saveChats() {
+  try { localStorage.setItem('fs_chats', JSON.stringify(chats)); } catch(e) {}
+}
+
+// ── NEW CHAT ──
+function newChat() {
+  activeChatId = null;
+  document.getElementById('chatWrap').innerHTML = '';
+  document.getElementById('chatWrap').style.display = 'none';
+  document.getElementById('hero').style.display = 'flex';
+  document.getElementById('topbarTitle').textContent = 'New chat';
+  document.getElementById('docPill').style.display = 'none';
+  renderList();
+}
+
+// ── SWITCH CHAT ──
+function switchChat(id) {
+  const chat = chats.find(c => c.id === id);
+  if (!chat) return;
+  activeChatId = id;
+  currentDoc = chat.doc;
+  document.getElementById('hero').style.display = 'none';
+  document.getElementById('topbarTitle').textContent = chat.title;
+  if (chat.doc) {
+    document.getElementById('docPill').style.display = 'flex';
+    document.getElementById('docPillName').textContent = chat.doc.replace('.pdf','');
+  } else {
+    document.getElementById('docPill').style.display = 'none';
+  }
+  const wrap = document.getElementById('chatWrap');
+  wrap.style.display = 'flex';
+  wrap.innerHTML = '';
+  chat.turns.forEach(t => {
+    const div = document.createElement('div');
+    div.className = 'turn';
+    div.innerHTML = buildTurnHTML(t.q, t.data);
+    wrap.appendChild(div);
+  });
+  renderList();
+  scrollBottom();
+}
+
+// ── UPLOAD ──
+async function uploadFile(file) {
+  if (!file.name.endsWith('.pdf')) { toast('Only PDF files supported', 'err'); return; }
+  const zone = document.getElementById('uploadZone');
+  const lbl = document.getElementById('uploadLbl');
+  const ico = document.getElementById('uploadIco');
+  zone.classList.add('loading');
+  ico.outerHTML = '<div class="spin" id="uploadIco"></div>';
+  lbl.textContent = 'Indexing...';
+  zone.onclick = null;
+  await fetch('/index', { method: 'DELETE' });
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const r = await fetch('/upload', { method: 'POST', body: fd });
+    const d = await r.json();
+    if (r.ok) { currentDoc = d.filename; toast('Ready · ' + d.filename, 'ok'); }
+    else toast(d.detail || 'Upload failed', 'err');
+  } catch(e) { toast('Upload failed', 'err'); }
+  finally {
+    zone.classList.remove('loading');
+    document.getElementById('uploadIco').outerHTML = `<svg id="uploadIco" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>`;
+    lbl.textContent = currentDoc ? currentDoc.replace('.pdf','') : 'Upload PDF';
+    zone.onclick = () => document.getElementById('fileInput').click();
+    document.getElementById('fileInput').value = '';
+  }
+}
+
+// ── TEXTAREA ──
+function setupTextarea() {
+  const ta = document.getElementById('qInput');
+  ta.addEventListener('input', () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 120) + 'px'; });
+  ta.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); } });
+}
+
+function useStarter(el) {
+  const text = el.innerText.replace('→','').trim();
+  document.getElementById('qInput').value = text;
+  document.getElementById('qInput').dispatchEvent(new Event('input'));
+  document.getElementById('qInput').focus();
+}
+
+// ── SUBMIT ──
+async function submit() {
+  const ta = document.getElementById('qInput');
+  const q = ta.value.trim();
+  if (!q || busy) return;
+  if (!currentDoc) { toast('Upload a PDF first', 'err'); return; }
+  busy = true;
+  ta.value = ''; ta.style.height = 'auto';
+  document.getElementById('sendBtn').disabled = true;
+
+  if (!activeChatId) {
+    const id = 'c' + Date.now();
+    const title = q.length > 44 ? q.slice(0, 44) + '…' : q;
+    chats.push({ id, title, doc: currentDoc, turns: [] });
+    activeChatId = id;
+    saveChats();
+    document.getElementById('topbarTitle').textContent = title;
+    document.getElementById('docPill').style.display = 'flex';
+    document.getElementById('docPillName').textContent = currentDoc.replace('.pdf','');
+  }
+
+  document.getElementById('hero').style.display = 'none';
+  const wrap = document.getElementById('chatWrap');
+  wrap.style.display = 'flex';
+
+  const lid = 'l' + Date.now();
+  const loadEl = document.createElement('div');
+  loadEl.className = 'loading-turn'; loadEl.id = lid;
+  loadEl.innerHTML = `<div class="q-row"><div class="q-bubble">${esc(q)}</div></div><div class="agent-row"><div class="dots"><span></span><span></span><span></span></div><span id="st_${lid}">Decomposing query...</span></div>`;
+  wrap.appendChild(loadEl);
+  scrollBottom(); renderList();
+
+  const steps = ['Decomposing query...','Searching documents...','Verifying evidence...','Synthesizing answer...'];
+  let step = 0;
+  const timer = setInterval(() => { if (step < 3) { step++; const e = document.getElementById('st_' + lid); if (e) e.textContent = steps[step]; } }, 1700);
+
+  try {
+    const r = await fetch('/query', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question: q }) });
+    const data = await r.json();
+    clearInterval(timer);
+    if (!r.ok) throw new Error(data.detail);
+    const turnEl = document.getElementById(lid);
+    turnEl.className = 'turn'; turnEl.id = '';
+    turnEl.innerHTML = buildTurnHTML(q, data);
+    const chat = chats.find(c => c.id === activeChatId);
+    if (chat) { chat.turns.push({ q, data }); saveChats(); }
+    scrollBottom();
+  } catch(e) {
+    clearInterval(timer);
+    const el = document.getElementById(lid); if (el) el.remove();
+    toast(e.message || 'Something went wrong', 'err');
+  } finally {
+    busy = false;
+    document.getElementById('sendBtn').disabled = false;
+  }
+}
+
+// ── BUILD HTML ──
+function buildTurnHTML(q, d) {
+  const conf = d.confidence || 'MEDIUM';
+  const sqs = d.sub_questions || [];
+  const cites = d.citations || [];
+  const subChips = sqs.length > 1 ? `<div class="subqs">${sqs.map(s => `<span class="subq-chip">${esc(s)}</span>`).join('')}</div>` : '';
+  const citeChips = cites.map((c, i) => `<div class="cite-chip"><div class="cite-n">${i+1}</div><span>${esc(c.source.replace('.pdf',''))}</span><span style="color:var(--green);font-weight:500">p.${c.page}</span><div class="cite-tip">${esc((c.preview||'').slice(0,180))}...</div></div>`).join('');
+  return `<div class="q-row"><div class="q-bubble">${esc(q)}</div></div>
+    <div class="a-row">
+      <div class="a-meta"><span class="fs-tag">FinSight</span><span class="conf-tag conf-${conf}">${conf}</span><span class="elapsed">${d.elapsed_seconds}s</span></div>
+      ${subChips}
+      <div class="a-text">${esc(d.answer)}</div>
+      ${citeChips ? `<div class="cites">${citeChips}</div>` : ''}
+    </div>`;
+}
+
+function scrollBottom() { const s = document.getElementById('scrollArea'); setTimeout(() => s.scrollTo({ top: s.scrollHeight, behavior: 'smooth' }), 50); }
+function esc(s) { if (!s) return ''; return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function toast(msg, type = 'ok') { const t = document.getElementById('toast'); t.textContent = msg; t.className = `toast ${type} show`; setTimeout(() => t.className = 'toast', 3000); }
+</script>
+</body>
+</html>

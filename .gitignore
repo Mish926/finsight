@@ -1,0 +1,10 @@
+.env
+data/pdfs/
+data/index/
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+*.faiss
+*.chunks
+screenshots/
