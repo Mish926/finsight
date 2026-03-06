@@ -2,12 +2,6 @@
 
 > Ask anything about your financial documents. Get cited answers in seconds.
 
-## Demo Video
-
-https://github.com/Mish926/finsight/raw/main/screenshots/demo.mov
-
-> Upload a financial PDF, ask questions, get cited answers — watch the full demo above.
-
 FinSight is a production-grade **Retrieval-Augmented Generation (RAG)** system built with a multi-agent pipeline. Upload any financial PDF — 10-K, annual report, earnings filing — and query it with natural language. Four specialized AI agents work in sequence to decompose your question, retrieve relevant context, verify evidence quality, and synthesize a cited answer.
 
 ![FinSight UI](screenshots/finsight-home.png)
@@ -19,6 +13,8 @@ FinSight is a production-grade **Retrieval-Augmented Generation (RAG)** system b
 ![FinSight Answer](screenshots/finsight-answer.png)
 
 > JP Morgan annual report queried for net revenue and net income — answered with exact figures and 29 page-level citations.
+
+▶️ **[Watch the full demo video](https://drive.google.com/file/d/1-Eui3cneaNpEyTpzbHNkdLhbScVHnDdh/view?usp=sharing)**
 
 ---
 
