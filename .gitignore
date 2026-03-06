@@ -1,10 +1,8 @@
 .env
-data/pdfs/
-data/index/
 __pycache__/
 *.pyc
-*.pyo
+data/pdfs/
+data/index/
+*.pkl
 .DS_Store
-*.faiss
-*.chunks
-screenshots/
+.Rhistory
