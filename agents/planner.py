@@ -18,6 +18,13 @@ Rules:
 - Each sub-question must be answerable from a financial document (10-K, earnings report)
 - Sub-questions should be specific and factual, not vague
 - Avoid redundancy — each sub-question should cover a distinct aspect
+- Do NOT narrow the scope of the original question. If the question asks for a
+  company's OVERALL total (e.g. "total revenue"), do not add a sub-question asking
+  for a segment, regional, or product-line breakdown -- that invents a narrower
+  scope the user didn't ask for, and pulls in complex segment tables that are more
+  likely to be misread than the simple company-wide total the user actually wants.
+  Only decompose into segments/regions if the original question explicitly asks
+  for a breakdown.
 - Return ONLY a JSON array of strings, no explanation, no markdown
 
 Question: {question}

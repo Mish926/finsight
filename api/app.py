@@ -74,14 +74,33 @@ async def stats():
     return JSONResponse(content=pipeline.get_stats())
 
 
+@app.delete("/documents/{filename}")
+async def delete_document(filename: str):
+    """Remove one document from the shared index only -- does not touch
+    the underlying PDF file on disk. Clearing the index and deleting the
+    user's file are two different actions; only the index changes here."""
+    try:
+        result = pipeline.remove_document(filename)
+        return JSONResponse(content={"success": True, **result})
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.delete("/index")
 async def clear_index():
+    """Clears the SEARCH INDEX only -- does not touch any files on disk.
+    Deleting a document from the index and deleting the underlying file
+    are two different, separate actions; bundling them together
+    (an earlier version of this endpoint did) risks destroying a user's
+    only copy of a file with no warning that it was about to happen."""
     import glob
     for f in glob.glob("data/index/*"):
         os.remove(f)
     global pipeline
     pipeline = FinSightPipeline(index_dir="data/index")
-    return JSONResponse(content={"success": True, "message": "Index cleared"})
+    return JSONResponse(content={"success": True, "message": "Index cleared. Uploaded PDF files were left untouched on disk."})
 
 
 if __name__ == "__main__":
