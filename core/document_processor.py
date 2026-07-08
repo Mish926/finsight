@@ -5,6 +5,7 @@ Handles PDF ingestion, text extraction, table extraction, and chunking.
 
 import fitz  # PyMuPDF -- flowing prose text extraction
 import pdfplumber  # structure-aware table extraction
+import gc
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -67,6 +68,15 @@ class DocumentProcessor:
         just aligned columns of text, which "lines" silently finds zero
         tables for). Text-strategy runs only as a fallback when line-based
         detection finds nothing, since it's more prone to noisy blank rows.
+
+        MEMORY: pdfplumber's Page objects cache their parsed layout data
+        (characters, lines, rects) the first time it's accessed, and that
+        cache is NOT released automatically as you iterate through many
+        pages. For a large filing (JPMorgan's 10-K runs 400+ pages), that
+        accumulates across the whole document and can be a significant
+        contributor to out-of-memory crashes on a constrained host. Each
+        page's cache is explicitly flushed after processing it, which
+        pdfplumber provides specifically for this use case.
         """
         tables_by_page = []
         with pdfplumber.open(path) as pdf:
@@ -80,6 +90,7 @@ class DocumentProcessor:
                         })
                 except Exception as e:
                     print(f"[DocumentProcessor] Table extraction failed on page {page_num}: {e}")
+                    page.flush_cache()
                     continue
                 for table in tables:
                     table = self._drop_blank_rows(table)
@@ -105,6 +116,13 @@ class DocumentProcessor:
                     if len(md.strip()) < 30:
                         continue
                     tables_by_page.append({"page": page_num, "text": md})
+                page.flush_cache()
+                if page_num % 50 == 0:
+                    # CPython doesn't always return freed memory to the OS
+                    # promptly within a long-running loop -- an explicit
+                    # nudge every 50 pages helps keep peak memory down on
+                    # large (400+ page) filings.
+                    gc.collect()
         return tables_by_page
 
     def _header_looks_misaligned(self, table: List[List], header_rows: int = 2) -> bool:
