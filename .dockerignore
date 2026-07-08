@@ -1,0 +1,12 @@
+.venv/
+.git/
+__pycache__/
+*.pyc
+data/pdfs/
+data/index/
+data/sessions/
+.env
+screenshots/*.mov
+*.mov
+.DS_Store
+.Rhistory
