@@ -3,17 +3,26 @@ FinSight FastAPI Server
 
 Session isolation: every visitor gets their own cookie-based session, and
 therefore their own isolated document index. What one visitor uploads is
-never visible to, searchable by, or deletable by another -- this was NOT
-true in earlier versions of this app (a single global index was shared
-by every visitor), and is required for any genuinely public deployment.
+never visible to, searchable by, or deletable by another.
+
+sys.path is set up explicitly at the top so this file finds `core` and
+`agents` regardless of how it's launched (bare `python api/app.py`,
+`PYTHONPATH=. python api/app.py`, or a hosting platform's own start
+command) -- relying on the launch command alone to set PYTHONPATH
+correctly is exactly the kind of thing that silently breaks on a
+platform you haven't tested on.
 """
 
+import sys
 import os
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import re
 import shutil
 import secrets
 import asyncio
-from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -23,18 +32,22 @@ from pydantic import BaseModel
 
 from core.pipeline import FinSightPipeline
 
-app = FastAPI(title="FinSight", version="2.0.0")
+from contextlib import asynccontextmanager
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    asyncio.create_task(_cleanup_stale_sessions())
+    yield
+
+
+app = FastAPI(title="FinSight", version="2.0.0", lifespan=lifespan)
 
 SESSION_COOKIE_NAME = "finsight_session"
-SESSION_TTL_HOURS = 24  # sessions inactive longer than this are cleaned up
+SESSION_TTL_HOURS = 24
 SESSION_ROOT = Path("data/sessions")
 SESSION_ROOT.mkdir(parents=True, exist_ok=True)
 
-# In-memory registry: session_id -> {"pipeline": FinSightPipeline, "last_active": datetime}
-# This is intentionally simple (not a database) -- fine for a single-process
-# deployment. On restart, in-memory state is lost, but each session's
-# on-disk index (if the host has persistent storage) can be reloaded
-# transparently the next time that visitor's cookie comes back.
 sessions: dict = {}
 
 
@@ -56,9 +69,6 @@ def get_session(
     response: Response,
     finsight_session: Optional[str] = Cookie(default=None)
 ) -> str:
-    """FastAPI dependency: returns a session_id, creating a new one (and
-    setting a cookie) if this visitor doesn't have one yet, or if the
-    cookie value doesn't look like a session ID we'd have issued."""
     session_id = finsight_session
     if not session_id or not re.match(r'^[A-Za-z0-9_-]{16,64}$', session_id):
         session_id = secrets.token_urlsafe(32)
@@ -86,9 +96,6 @@ def get_pipeline(session_id: str = Depends(get_session)) -> FinSightPipeline:
 
 
 async def _cleanup_stale_sessions():
-    """Background task: periodically removes sessions (both in-memory and
-    their on-disk data) that have been inactive longer than SESSION_TTL_HOURS,
-    so a public deployment doesn't accumulate unlimited abandoned indexes."""
     while True:
         await asyncio.sleep(3600)
         cutoff = datetime.utcnow() - timedelta(hours=SESSION_TTL_HOURS)
@@ -99,11 +106,6 @@ async def _cleanup_stale_sessions():
             if session_dir.exists():
                 shutil.rmtree(session_dir, ignore_errors=True)
             print(f"[Cleanup] Removed stale session {sid}")
-
-
-@app.on_event("startup")
-async def start_cleanup_task():
-    asyncio.create_task(_cleanup_stale_sessions())
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -164,9 +166,6 @@ async def stats(pipeline: FinSightPipeline = Depends(get_pipeline)):
 
 @app.delete("/documents/{filename}")
 async def delete_document(filename: str, pipeline: FinSightPipeline = Depends(get_pipeline)):
-    """Remove one document from THIS session's index only -- does not
-    touch the underlying PDF file on disk, and cannot affect any other
-    visitor's session."""
     try:
         result = pipeline.remove_document(filename)
         return JSONResponse(content={"success": True, **result})
@@ -178,8 +177,6 @@ async def delete_document(filename: str, pipeline: FinSightPipeline = Depends(ge
 
 @app.delete("/index")
 async def clear_index(session_id: str = Depends(get_session)):
-    """Clears THIS session's search index only -- does not touch any
-    files on disk, and cannot affect any other visitor's session."""
     import glob
     idx_dir = _session_index_dir(session_id)
     for f in glob.glob(f"{idx_dir}/*"):
