@@ -5,6 +5,15 @@ Session isolation: every visitor gets their own cookie-based session, and
 therefore their own isolated document index. What one visitor uploads is
 never visible to, searchable by, or deletable by another.
 
+IMPORTANT (learned the hard way): endpoints here return plain dicts, NOT
+JSONResponse objects. When a FastAPI route returns a Response directly,
+FastAPI discards any headers/cookies set on the dependency-injected
+Response parameter -- which silently dropped the session cookie set in
+get_session(). The browser then never sent a cookie back, every request
+generated a fresh session with an empty index, and uploads appeared to
+"vanish" by query time. Returning dicts lets FastAPI build the response
+itself and preserve the cookie.
+
 sys.path is set up explicitly at the top so this file finds `core` and
 `agents` regardless of how it's launched (bare `python api/app.py`,
 `PYTHONPATH=. python api/app.py`, or a hosting platform's own start
@@ -27,7 +36,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Cookie, Response
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from core.pipeline import FinSightPipeline
@@ -132,13 +141,13 @@ async def upload_pdf(
 
     try:
         result = pipeline.index_document(str(save_path))
-        return JSONResponse(content={
+        return {
             "success": True,
             "message": f"Indexed {result['chunks']} chunks from {result['filename']}",
             "filename": result["filename"],
             "chunks": result["chunks"],
             "total_indexed": result["total_indexed"]
-        })
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -152,7 +161,7 @@ async def query(request: QueryRequest, pipeline: FinSightPipeline = Depends(get_
         result = pipeline.query(request.question)
         if "error" in result and result["answer"] is None:
             raise HTTPException(status_code=400, detail=result["error"])
-        return JSONResponse(content=result)
+        return result
     except HTTPException:
         raise
     except Exception as e:
@@ -161,14 +170,14 @@ async def query(request: QueryRequest, pipeline: FinSightPipeline = Depends(get_
 
 @app.get("/stats")
 async def stats(pipeline: FinSightPipeline = Depends(get_pipeline)):
-    return JSONResponse(content=pipeline.get_stats())
+    return pipeline.get_stats()
 
 
 @app.delete("/documents/{filename}")
 async def delete_document(filename: str, pipeline: FinSightPipeline = Depends(get_pipeline)):
     try:
         result = pipeline.remove_document(filename)
-        return JSONResponse(content={"success": True, **result})
+        return {"success": True, **result}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -182,7 +191,7 @@ async def clear_index(session_id: str = Depends(get_session)):
     for f in glob.glob(f"{idx_dir}/*"):
         os.remove(f)
     sessions[session_id]["pipeline"] = FinSightPipeline(index_dir=idx_dir)
-    return JSONResponse(content={"success": True, "message": "Index cleared. Uploaded PDF files were left untouched on disk."})
+    return {"success": True, "message": "Index cleared. Uploaded PDF files were left untouched on disk."}
 
 
 if __name__ == "__main__":

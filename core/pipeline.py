@@ -17,7 +17,17 @@ from agents.retriever import RetrieverAgent
 from agents.critic import CriticAgent
 from agents.synthesizer import SynthesizerAgent
 
+from observability import Lens as ObsLens
+
 load_dotenv()
+
+# Module-level so all session pipelines share one observability database.
+# SQLite writes are lock-protected inside the observability package, so
+# concurrent sessions are safe. Unlike the per-response agent_stats tracker
+# (core/agent_lens.py, reset every query), this records persistently across
+# all queries: per-agent cost attribution, redundancy detection, and
+# cost-per-successful-answer. See profiling/CASESTUDY.md for findings.
+obs = ObsLens(app="finsight", db_path="data/agentlens.db")
 
 
 class GroqModel:
@@ -39,6 +49,15 @@ class GroqModel:
     cumulatively exceed it. Rate-limit errors are retried with backoff
     (using Groq's suggested wait time when it provides one) instead of
     immediately failing the whole query.
+
+    NOTE (measured, not assumed): the Groq SDK also absorbs some 429s with
+    its own internal retries BEFORE the retry logic below ever sees them.
+    Those silent stalls are invisible to this class's logging and only
+    show up in the observability layer's per-span latency, because the
+    wrapped client measures the full duration of each create() call
+    including whatever the SDK does inside it. In the profiled 12-question
+    run this accounted for 90% of end-to-end latency, concentrated in the
+    Critic (see profiling/CASESTUDY.md).
     """
     MAX_RATE_LIMIT_RETRIES = 3
 
@@ -122,7 +141,13 @@ class FinSightPipeline:
         if not api_key:
             raise ValueError("GROQ_API_KEY not found in .env file")
 
-        client = Groq(api_key=api_key)
+        # obs.wrap intercepts every chat.completions.create call for the
+        # observability layer. The wrapper is a transparent proxy, so the
+        # retry/fallback logic in GroqModel is unaffected. A bonus over the
+        # internal tracker: the wrapper records response.model -- the model
+        # that ACTUALLY answered -- so 70B->8B fallback events are visible
+        # in the cost data.
+        client = obs.wrap(Groq(api_key=api_key))
         self.lens = AgentLens()
         # Planner and Critic just need to decompose questions and judge
         # evidence quality -- the cheap, fast model handles that fine.
@@ -205,22 +230,37 @@ class FinSightPipeline:
 
         self.lens.reset()
         start = time.time()
-        print(f"\n[1/4] QueryPlanner running...")
-        self.llm.current_agent = "QueryPlanner"
-        sub_questions = self.planner.run(question)
-        print(f"  Sub-questions: {sub_questions}")
 
-        print(f"[2/4] Retriever running...")
-        results, context = self.retriever.run(sub_questions)
-        print(f"  Retrieved {len(results)} unique chunks")
+        with obs.trace(name=question) as trace_id:
+            print(f"\n[1/4] QueryPlanner running...")
+            self.llm.current_agent = "QueryPlanner"
+            with obs.agent("planner"):
+                sub_questions = self.planner.run(question)
+            print(f"  Sub-questions: {sub_questions}")
 
-        print(f"[3/4] Critic running...")
-        self.llm.current_agent = "Critic"
-        verdict = self.critic.run(question, context, results)
-        print(f"  Sufficient: {verdict.sufficient} | Confidence: {verdict.confidence}")
+            print(f"[2/4] Retriever running...")
+            with obs.agent("retriever"):
+                results, context = self.retriever.run(sub_questions)
+            print(f"  Retrieved {len(results)} unique chunks")
 
-        print(f"[4/4] Synthesizer running...")
-        result = self.synthesizer.run(question, context, results, verdict, sub_questions)
+            print(f"[3/4] Critic running...")
+            self.llm.current_agent = "Critic"
+            with obs.agent("critic"):
+                verdict = self.critic.run(question, context, results)
+            print(f"  Sufficient: {verdict.sufficient} | Confidence: {verdict.confidence}")
+
+            print(f"[4/4] Synthesizer running...")
+            with obs.agent("synthesizer"):
+                result = self.synthesizer.run(question, context, results, verdict, sub_questions)
+
+            # Outcome signal for cost-per-successful-answer: citations
+            # present and self-reported confidence not low. Deliberately
+            # conservative -- an uncited or low-confidence answer doesn't
+            # count as a success even if it happens to be correct.
+            success = bool(result.citations) and str(result.confidence).lower() != "low"
+            obs.record_outcome(trace_id, success=success,
+                               meta={"confidence": result.confidence,
+                                     "n_citations": len(result.citations or [])})
 
         elapsed = round(time.time() - start, 2)
         print(f"\nDone in {elapsed}s")
@@ -233,7 +273,8 @@ class FinSightPipeline:
             "sub_questions": result.sub_questions,
             "verdict": result.verdict,
             "elapsed_seconds": elapsed,
-            "agent_stats": self.lens.summary()
+            "agent_stats": self.lens.summary(),
+            "trace_id": trace_id
         }
 
     def get_stats(self) -> dict:

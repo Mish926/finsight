@@ -4,6 +4,8 @@
 
 FinSight is a **Retrieval-Augmented Generation (RAG)** system built with a multi-agent pipeline plus a deterministic post-generation verification layer. Upload any financial PDF (10-K, annual report, earnings filing) and query it with natural language, across multiple documents at once. Four specialized AI agents decompose your question, retrieve relevant context, verify evidence quality, and synthesize a cited answer, which is then checked, and corrected if needed, against the actual source tables before you ever see it.
 
+Every query is also profiled by an integrated observability layer (**AgentLens**, `observability/`) that attributes token cost and latency to individual agents, detects redundant calls, and tracks cost per successful answer, with findings from a real profiling run documented in `profiling/CASESTUDY.md`.
+
 ![FinSight UI](screenshots/finsight-home.png)
 
 ---
@@ -49,6 +51,8 @@ User Question
 └─────────────┘
 ```
 
+Every LLM call in the pipeline flows through a wrapped client that records the span (agent, model, tokens, latency, cost) into a SQLite observability database, and every completed query records a success/failure outcome derived from the verification result.
+
 **Why multi-agent, and why verification on top of it?**
 A single LLM call hallucinates and lacks structure. The Critic agent catches low-quality retrievals before synthesis, and the Planner ensures complex multi-part questions get fully answered. But even with careful prompting, a small free-tier LLM occasionally reads the wrong year's column out of a multi-year table, a real, observed failure mode. Rather than relying on prompting alone to prevent that, FinSight parses the actual cited table after generation and checks the number against it directly. If they don't match, it's corrected automatically, not just flagged.
 
@@ -57,8 +61,10 @@ A single LLM call hallucinates and lacks structure. The Critic agent catches low
 ## Features
 
 - **Multi-document support**: upload multiple companies' filings into the same index and ask comparison questions across them, with retrieval that adapts automatically. Single-company questions get full retrieval depth, cross-company questions get a fair, balanced share of context from every company involved.
+- **Per-visitor session isolation**: every visitor gets their own cookie-based session and a fully isolated document index. What one visitor uploads is never visible to, searchable by, or deletable by another, making the public deployment genuinely multi-tenant.
 - **Document management UI**: see everything currently indexed, remove one document without affecting the rest, or clear the whole index. No code or server access required.
 - **Deterministic answer verification**: every cited financial figure is checked against its actual source table (or, for prose-format tables, against nearby chunks reconstructed from the same page) and corrected automatically if it doesn't match the year the question asked about.
+- **Integrated observability (AgentLens)**: per-agent cost attribution, duplicate/near-duplicate call detection, and cost-per-successful-answer tracking for every query, persisted across sessions and reportable from the command line. See the Observability section below.
 - **Hybrid retrieval**: TF-IDF (lexical) + LSA/TruncatedSVD (semantic) search, so a question about "revenue" can still find a chunk that only says "net sales."
 - **Financial-term query expansion**: 30+ GAAP/SEC terminology clusters (revenue/net sales, net income/earnings, EPS, banking-specific terms like net interest income and provision for credit losses), so retrieval isn't thrown off by different filers using different words for the same line item.
 - **Table-structure-aware extraction**: tables are parsed with `pdfplumber` (both bordered and borderless detection strategies) into clean markdown alongside the normal prose extraction, with a quality filter that rejects tables where column detection clearly failed rather than injecting a confidently-wrong-looking table.
@@ -72,14 +78,40 @@ A single LLM call hallucinates and lacks structure. The Critic agent catches low
 
 ## Observability & Evaluation
 
-**AgentLens (`core/agent_lens.py`)** wraps every LLM call and tags it with the agent that made it. Each `/query` response includes an `agent_stats` block with per-agent token usage, latency, and estimated cost.
+### AgentLens (`observability/`)
 
-**Hallucination eval (`eval/hallucination_eval.py`)** runs golden questions through the live pipeline and scores numeric grounding and (optionally) LLM-judge faithfulness:
+A framework-agnostic observability layer, built for this project and designed to work with any pipeline on an OpenAI-compatible client. It instruments at the client level: the Groq client is wrapped once in `core/pipeline.py`, and every `chat.completions.create` call anywhere in the pipeline is recorded as a span with the active agent, model, token counts, latency, and estimated cost, propagated via `contextvars` so attribution is safe under FastAPI's concurrency. Each query is one trace; the verification result is recorded as the trace's outcome.
+
+Three reports answer questions generic tracing tools don't:
+
+1. **Per-agent cost attribution**: which agent is spending the money, with token, dollar, latency, and error rollups.
+2. **Redundancy detection**: exact and near-duplicate calls within a trace, with estimated wasted cost.
+3. **Cost per outcome**: total spend divided by successful answers only, so failed queries' spend counts against the metric instead of being hidden.
+
+```bash
+python -m observability.cli report --db data/agentlens.db --app finsight
+```
+
+### Profiling case study (`profiling/CASESTUDY.md`)
+
+A 12-question profiling run over the Apple, Amazon, and JPMorgan FY2025 filings produced findings that would have been invisible without measurement:
+
+- **90 percent of end-to-end latency was hiding inside the cheapest agent.** The Critic (8B model) averaged 25.6s per call while the 70B Synthesizer averaged 0.96s, a physical impossibility for inference time. The cause is consistent with Groq's rolling tokens-per-minute budget: the Groq SDK silently absorbs 429s with internal retries, so the stalls never triggered the application's own rate-limit logging and only surfaced through client-level interception. An isolated single query later showed 0.5s Critic latency, corroborating that the stalls are budget exhaustion under sustained load, not model latency.
+- **Cost and latency point at different agents.** 93.5 percent of spend goes to the Synthesizer; 90 percent of time goes to the Critic, which also carries 89 percent of all 8B-model tokens (roughly 2,600 tokens of context per call to produce a 165-token verdict). "Optimize the expensive agent" and "optimize the slow agent" are different projects, and only measurement reveals which one users actually feel.
+- **Baseline economics**: $0.0025 per query, $0.0034 per successful answer, with the Planner effectively free (0.7 percent of spend), retrieval costing zero LLM tokens by design, and zero redundant calls detected.
+
+The raw trace database behind the case study is preserved in `profiling/agentlens_casestudy.db`.
+
+### Hallucination eval (`eval/hallucination_eval.py`)
+
+Runs golden questions through the live pipeline and scores numeric grounding and (optionally) LLM-judge faithfulness:
 ```
 python -m eval.hallucination_eval --questions eval/golden_questions.json --judge
 ```
 
-**Debug tooling**: three scripts for diagnosing retrieval/answer issues directly against the live index, built while tracking down real failures during development.
+### Debug tooling
+
+Three scripts for diagnosing retrieval/answer issues directly against the live index, built while tracking down real failures during development.
 - `debug_pipeline.py`: runs one question through all 4 agents and prints the full, untruncated context sent to the Critic/Synthesizer.
 - `debug_search.py`: inspects raw retrieval ranking for a query against a specific document.
 - `debug_rank_check.py`: brute-force scans the index for a known figure and reports exactly what rank it gets, to distinguish a retrieval-ranking problem from a retrieval-budget problem from an extraction gap.
@@ -91,12 +123,13 @@ python -m eval.hallucination_eval --questions eval/golden_questions.json --judge
 Built and stress-tested against Apple, Amazon, and JPMorgan Chase, both FY2024 and FY2025 filings. Several real failure modes were found, diagnosed, and fixed during development (see below); the ones still open are documented honestly here rather than papered over.
 
 - **Small-model reliability is reduced, not eliminated.** Llama 3.1 8B / 3.3 70B (Groq free tier) can still occasionally misread a table or hedge inconsistently, even with the verification layer and prompt guardrails in place. The deterministic verifier catches and corrects the specific, highest-stakes failure mode (wrong-year-column citations) with certainty when it fires, but it can only check citations that reference a chunk it can locate structure in. It isn't a guarantee against every possible reasoning error.
+- **The observability success signal is self-reported, not ground truth.** A trace counts as successful when the answer has citations and non-low confidence, which measures whether the pipeline believes itself, not independently verified correctness. The hallucination eval exists for the latter; the two measure different things and are documented as such.
+- **Free-tier throughput is bounded by the shared 8B token budget.** As the case study shows, sustained multi-query load stalls on the Critic because Planner and Critic share one rolling tokens-per-minute budget. The measured fix candidates, in order of leverage: trim the context the Critic reads, move the Critic to a separately-budgeted model, or a paid tier.
 - **Query expansion is a curated list, not a learned one.** The financial-term synonym clusters (`agents/retriever.py`) cover the most common GAAP/SEC line items and banking-specific terms. Niche or industry-specific terms not yet in the list would need either an expansion or a return to full embedding-based semantic search.
 - **No GPU-based neural embeddings.** PyTorch dropped Intel macOS wheel support after 2.2.2, incompatible with `transformers`' `torch>=2.4` requirement, so the semantic layer here is TF-IDF + LSA (`TruncatedSVD`), not sentence-transformer embeddings. This is a deliberate, tested tradeoff (lighter weight, zero platform-specific install issues) rather than an oversight; on a Linux/Apple Silicon deployment, real embeddings would be a straightforward upgrade path.
-- **Single shared index across all users.** There's no per-session isolation yet; everyone using a given deployment shares the same document index. Fine for a personal or demo deployment; a genuinely multi-tenant public deployment would need session-scoped indexes.
 
 ### Fixed during development (documented for the engineering story, not because they're still open)
-A non-exhaustive list of real, diagnosed-and-resolved issues, each found through actual testing rather than assumption: chunk ID collisions silently dropping one document's content when multiple documents were indexed; a frontend bug that wiped the entire index before every upload; PDF table extraction failing silently on borderless tables (the vast majority of real financial tables); a "clean-looking but wrong" table-extraction failure mode on JPMorgan's especially dense segment-reporting tables; cross-document source misattribution; multi-year table column misreading; retrieval budget being split evenly across irrelevant companies for single-company questions; a retrieval-boost fix that turned out to itself be the cause of a regression (verified via direct measurement, not assumption) and was removed.
+A non-exhaustive list of real, diagnosed-and-resolved issues, each found through actual testing rather than assumption: chunk ID collisions silently dropping one document's content when multiple documents were indexed; a frontend bug that wiped the entire index before every upload; PDF table extraction failing silently on borderless tables (the vast majority of real financial tables); a "clean-looking but wrong" table-extraction failure mode on JPMorgan's especially dense segment-reporting tables; cross-document source misattribution; multi-year table column misreading; retrieval budget being split evenly across irrelevant companies for single-company questions; a retrieval-boost fix that turned out to itself be the cause of a regression (verified via direct measurement, not assumption) and was removed; session cookies silently dropped because endpoints returned `JSONResponse` objects directly, which makes FastAPI discard cookies set on the dependency-injected `Response`, so every request created a fresh empty session and uploads could never be queried (caught through end-to-end browser testing after unit-level testing had passed); rate-limit stalls invisible to application-level retry logging because the Groq SDK absorbs 429s internally (caught by the observability layer's client-level latency measurement).
 
 ---
 
@@ -108,8 +141,9 @@ A non-exhaustive list of real, diagnosed-and-resolved issues, each found through
 | Retrieval | Hybrid TF-IDF (scikit-learn) + LSA/TruncatedSVD, fully local, no GPU |
 | Document parsing | PyMuPDF (prose) + pdfplumber (structured tables, dual bordered/borderless detection) |
 | Answer verification | Deterministic table-parsing cross-check (`core/answer_verifier.py`) |
+| Observability | AgentLens (`observability/`): client-level span capture, contextvars attribution, SQLite (WAL) persistence, zero runtime dependencies |
 | Vector storage | NumPy + cosine similarity (pickle-persisted, survives restarts) |
-| Backend | FastAPI + Uvicorn |
+| Backend | FastAPI + Uvicorn, cookie-based per-session isolation |
 | Frontend | Vanilla HTML/CSS/JS, no framework |
 
 ---
@@ -170,6 +204,13 @@ PYTHONPATH=. python api/app.py
 http://localhost:5002
 ```
 
+### Running the tests
+
+```bash
+python -m pip install pytest
+python -m pytest tests/ -q
+```
+
 ---
 
 ## Usage
@@ -179,6 +220,7 @@ http://localhost:5002
 3. **Ask a question**: type in the input bar; complex questions ("compare X, Y, and Z") are automatically decomposed.
 4. **Read the answer**: citations show exact page numbers; a confidence badge reflects whether the answer was fully grounded; a verification note appears if a figure was auto-corrected.
 5. **Manage chats**: hover over a chat in the sidebar for a delete option; "+" starts a new chat.
+6. **Inspect the costs**: after any number of queries, run the observability report to see per-agent attribution and cost per successful answer.
 
 ---
 
@@ -196,19 +238,36 @@ finsight/
 ├── core/
 │   ├── document_processor.py  # PDF ingestion: prose + table-aware chunking
 │   ├── vector_store.py        # Hybrid TF-IDF+LSA embeddings, per-document removal
-│   ├── pipeline.py            # Orchestrates all 4 agents + rate-limit retry
-│   ├── agent_lens.py          # Per-agent token/cost/latency tracking
+│   ├── pipeline.py            # Orchestrates all 4 agents + rate-limit retry,
+│   │                          #   instrumented end to end by the observability layer
+│   ├── agent_lens.py          # Per-response agent_stats (UI display)
 │   └── answer_verifier.py     # Deterministic post-generation figure verification
+├── observability/             # AgentLens: persistent cost observability
+│   ├── lens.py                #   trace/agent context managers, client wrapping
+│   ├── wrapper.py             #   transparent OpenAI-compatible client proxy
+│   ├── context.py             #   contextvars propagation (thread/async safe)
+│   ├── storage.py             #   SQLite (WAL) trace + span persistence
+│   ├── analysis.py            #   attribution, redundancy, cost-per-outcome
+│   ├── pricing.py             #   per-model cost table
+│   └── cli.py                 #   `python -m observability.cli report`
+├── profiling/
+│   ├── CASESTUDY.md           # Profiling findings from a real 12-question run
+│   ├── questions_2025.json    # The question set used
+│   └── agentlens_casestudy.db # Raw trace data behind the case study
 ├── eval/
 │   ├── hallucination_eval.py  # Numeric grounding + LLM-judge faithfulness scoring
 │   └── golden_questions.json  # Sample eval question set
+├── tests/
+│   └── test_observability.py  # Observability layer test suite (offline, no API key)
 ├── api/
-│   ├── app.py                  # FastAPI server (upload, query, document management)
+│   ├── app.py                  # FastAPI server: upload, query, document management,
+│   │                           #   cookie-based per-session isolation
 │   └── templates/
 │       └── index.html          # Full UI (single file, no framework)
 ├── data/
 │   ├── pdfs/                   # Uploaded PDFs (gitignored)
-│   └── index/                  # Persisted vector index (gitignored)
+│   ├── sessions/               # Per-session indexes and uploads (gitignored)
+│   └── agentlens.db            # Observability database (gitignored)
 ├── debug_pipeline.py            # Diagnostic: full context inspection
 ├── debug_search.py               # Diagnostic: raw retrieval ranking inspection
 ├── debug_rank_check.py           # Diagnostic: figure-to-rank verification
@@ -232,6 +291,9 @@ Planner and Critic just need to decompose questions and judge evidence sufficien
 **Why a deterministic verifier on top of prompting?**
 Prompt instructions reduce a small model's tendency to misread a table column, but can't guarantee it. The verifier parses the actual cited chunk (or, if the table got split across chunk boundaries, searches nearby chunks and the full corpus for the missing header) and checks the number's column position against the year in question directly, a hard, testable check rather than another instruction hoping the model complies.
 
+**Why instrument at the client level instead of the framework level?**
+FinSight uses no agent framework, so framework callbacks (the usual observability integration point) have nothing to hook. The observability layer instead wraps the Groq client object itself in a transparent proxy, which has two consequences the case study demonstrates concretely: it works with zero changes to agent code, and it measures the full duration of every call including whatever the SDK does internally, which is how the silent SDK-level rate-limit stalls (invisible to application logging) were caught. Attribution flows through `contextvars` rather than parameters, so the pipeline's threading and FastAPI's async handling can't cross-attribute spans.
+
 **Chunking strategy**
 Documents are split into 900-character chunks with 300-character overlap (increased from an initial 500/100 after finding that smaller chunks were splitting table headers away from their data rows), plus separately-extracted table chunks via `pdfplumber` for anything with a genuine grid structure.
 
@@ -240,14 +302,18 @@ Documents are split into 900-character chunks with 300-character overlap (increa
 ## Demo Questions
 
 ### Single-company
-- What was Apple's total revenue for fiscal year 2024?
-- What is Amazon's operating income by segment?
+- What was Apple's total revenue for fiscal year 2025?
+- What is Amazon's operating income by segment for fiscal year 2025?
 - What did JPMorgan say about credit loss provisions and loan quality?
 
 ### Cross-company (tests multi-document retrieval + verification)
-- Compare the total revenue for Apple, Amazon, and JPMorgan for fiscal year 2024.
-- What was JPMorgan's net income for fiscal year 2024, and how does that compare to Apple's and Amazon's?
-- What percentage of Amazon's total revenue came from AWS?
+- Compare the total revenue for Apple, Amazon, and JPMorgan for fiscal year 2025.
+- What was JPMorgan's net income for fiscal year 2025, and how does that compare to Apple's and Amazon's?
+- What percentage of Amazon's total revenue came from AWS in fiscal year 2025?
+
+### Year-over-year (tests multi-year table reading, the verifier's home turf)
+- How did Apple's total revenue in fiscal year 2025 compare to fiscal year 2024?
+- What was Amazon's net income for fiscal year 2025 compared to 2024?
 
 ---
 
@@ -267,4 +333,4 @@ Documents are split into 900-character chunks with 300-character overlap (increa
 
 ---
 
-*FinSight is a portfolio project demonstrating multi-agent RAG architecture, retrieval engineering, and deterministic answer verification for financial document analysis.*
+*FinSight is a portfolio project demonstrating multi-agent RAG architecture, retrieval engineering, deterministic answer verification, and production observability for financial document analysis.*

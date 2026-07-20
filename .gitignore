@@ -6,3 +6,8 @@ data/index/
 *.pkl
 .DS_Store
 .Rhistory
+data/agentlens.db*
+.venv/
+data/sessions/
+data/casestudy_index/
+tests/__pycache__/
